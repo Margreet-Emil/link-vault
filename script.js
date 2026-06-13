@@ -1,4 +1,4 @@
-const API = "https://link-vault.runasp.net/api";
+const API = "http://localhost:5000/api";
 
 const Auth = {
   setToken(token) {
