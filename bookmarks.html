@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>LinkVault — Bookmarks</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css"/>
+</head>
+<body>
+<div id="navbar-placeholder"></div>
+
+<div class="container-fluid mt-4 px-4">
+  <div id="alert-area"></div>
+
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="mb-0">Bookmarks</h4>
+    <button class="btn btn-primary btn-sm" onclick="openCreate()">+ New Bookmark</button>
+  </div>
+
+  <!-- Filter bar -->
+  <div class="card mb-3">
+    <div class="card-body py-2">
+      <div class="row g-2 align-items-center">
+        <div class="col-md-3">
+          <input type="text" id="filterSearch" class="form-control form-control-sm" placeholder="Search title or URL..."/>
+        </div>
+        <div class="col-md-3">
+          <select id="filterCategory" class="form-select form-select-sm">
+            <option value="">All Categories</option>
+          </select>
+        </div>
+        <div class="col-auto">
+          <button class="btn btn-sm btn-primary me-1" onclick="applyFilters()">Apply</button>
+          <button class="btn btn-sm btn-secondary" onclick="clearFilters()">Clear</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body p-0">
+      <table class="table table-bordered table-hover mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Title</th>
+            <th>URL</th>
+            <th>Category</th>
+            <th class="text-center" style="width:220px">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="bmBody">
+          <tr>
+            <td colspan="4" class="text-center py-4 text-muted">No bookmarks found.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal fade" id="bmModal">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="bmModalTitle">New Bookmark</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="bm-modal-error" class="alert alert-danger d-none"></div>
+        <div class="mb-2">
+          <label class="form-label">Title *</label>
+          <input type="text" id="bmTitle" class="form-control" placeholder="Bookmark title"/>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">URL *</label>
+          <input type="url" id="bmUrl" class="form-control" placeholder="https://..."/>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Category *</label>
+          <select id="bmCategory" class="form-select">
+            <option value="">Select category...</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" onclick="saveBookmark()">
+          <span id="bmSaveTxt">Create</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="script.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  Auth.requireAuth();
+  initNavbar('bookmarks');
+
+  let bookmarks  = [];
+  let categories = [];
+  let editingId  = null;
+  let modal      = null;
+
+  document.addEventListener('DOMContentLoaded', async () => {
+    modal = new bootstrap.Modal(document.getElementById('bmModal'));
+    await loadCategories();
+    await loadBookmarks();
+  });
+
+  async function loadCategories() {
+    try {
+      const data = await apiFetch('/Category');
+      categories = Array.isArray(data) ? data : (data?.items || []);
+      const sel = document.getElementById('filterCategory');
+      categories.forEach(c => {
+        sel.innerHTML += `<option value="${c.id}">${esc(c.categoryName)}</option>`;
+      });
+    } catch (err) { console.error(err); }
+  }
+
+  async function loadBookmarks() {
+    document.getElementById('bmBody').innerHTML = '<tr><td colspan="4" class="text-center py-4 text-muted">Loading...</td></tr>';
+    try {
+      const data = await apiFetch('/Bookmark');
+      bookmarks = Array.isArray(data) ? data : (data?.items || []);
+      renderTable(bookmarks);
+    } catch (err) {
+      showAlert(err.message, 'danger');
+    }
+  }
+
+  function renderTable(list) {
+    const tbody = document.getElementById('bmBody');
+    if (!list.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="text-center py-4 text-muted">No bookmarks found.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = list.map(bm => `
+      <tr>
+        <td><a href="bookmark.html?id=${bm.id}">${esc(bm.title)}</a></td>
+        <td><a href="${esc(bm.url)}" target="_blank" rel="noopener">${esc(bm.url)}</a></td>
+        <td>${esc(bm.categoryName || '—')}</td>
+        <td class="text-center">
+          <a href="bookmark.html?id=${bm.id}" class="btn btn-sm btn-info me-1">Details</a>
+          <button class="btn btn-sm btn-warning me-1" onclick="openEdit(${bm.id})">Edit</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteBookmark(${bm.id}, '${esc(bm.title)}')">Delete</button>
+        </td>
+      </tr>`).join('');
+  }
+function applyFilters() {
+  const search = document.getElementById('filterSearch').value.toLowerCase();
+  const catId  = document.getElementById('filterCategory').value;
+
+  let list = bookmarks;
+  if (search) list = list.filter(b => b.title.toLowerCase().includes(search) || b.url.toLowerCase().includes(search));
+  if (catId)  list = list.filter(b => String(b.categoryId) === catId  
+               || b.categoryName === categories.find(c => c.id == catId)?.categoryName); 
+  renderTable(list);
+}
+
+  function clearFilters() {
+    document.getElementById('filterSearch').value   = '';
+    document.getElementById('filterCategory').value = '';
+    renderTable(bookmarks);
+  }
+
+  function populateCatDropdown(selectedId = '') {
+    const sel = document.getElementById('bmCategory');
+    sel.innerHTML = '<option value="">Select category...</option>';
+    categories.forEach(c => {
+      sel.innerHTML += `<option value="${c.id}" ${c.id == selectedId ? 'selected' : ''}>${esc(c.categoryName)}</option>`;
+    });
+  }
+
+  function openCreate() {
+    editingId = null;
+    document.getElementById('bmModalTitle').textContent = 'New Bookmark';
+    document.getElementById('bmSaveTxt').textContent    = 'Create';
+    document.getElementById('bmTitle').value = '';
+    document.getElementById('bmUrl').value   = '';
+    document.getElementById('bm-modal-error').classList.add('d-none');
+    populateCatDropdown();
+    modal.show();
+  }
+
+  function openEdit(id) {
+    const bm = bookmarks.find(b => b.id === id);
+    if (!bm) return;
+    editingId = id;
+    document.getElementById('bmModalTitle').textContent = 'Edit Bookmark';
+    document.getElementById('bmSaveTxt').textContent    = 'Update';
+    document.getElementById('bmTitle').value = bm.title || '';
+    document.getElementById('bmUrl').value   = bm.url   || '';
+    document.getElementById('bm-modal-error').classList.add('d-none');
+    populateCatDropdown(bm.categoryId);
+    modal.show();
+  }
+
+  async function saveBookmark() {
+    const title      = document.getElementById('bmTitle').value.trim();
+    const url        = document.getElementById('bmUrl').value.trim();
+    const categoryId = document.getElementById('bmCategory').value;
+    const errEl      = document.getElementById('bm-modal-error');
+    errEl.classList.add('d-none');
+
+    if (!title || !url || !categoryId) {
+      errEl.textContent = 'All fields are required.';
+      errEl.classList.remove('d-none');
+      return;
+    }
+
+    const body = { title, url, categoryId: parseInt(categoryId) };
+
+    try {
+      if (editingId) {
+        await apiFetch('/Bookmark/' + editingId, {
+          method: 'PUT',
+          body: JSON.stringify(body)
+        });
+        showAlert('Bookmark updated.', 'success');
+      } else {
+        await apiFetch('/Bookmark', {
+          method: 'POST',
+          body: JSON.stringify(body)
+        });
+        showAlert('Bookmark created.', 'success');
+      }
+     
+      loadBookmarks();
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.classList.remove('d-none');
+    }
+  }
+
+  async function deleteBookmark(id, title) {
+    if (!confirm('Delete "' + title + '"?')) return;
+    try {
+      await apiFetch('/Bookmark/' + id, { method: 'DELETE' });
+      showAlert('Bookmark deleted.', 'success');
+      loadBookmarks();
+    } catch (err) {
+      showAlert(err.message, 'danger');
+    }
+  }
+</script>
+</body>
+</html>
